@@ -7,6 +7,7 @@ load_dotenv()
 
 app = Flask(__name__)
 
+# HubSpot & SignalHire keys from environment
 HUBSPOT_TOKEN = os.getenv("HUBSPOT_TOKEN")
 SIGNALHIRE_API_KEY = os.getenv("SIGNALHIRE_API_KEY")
 
@@ -18,6 +19,7 @@ headers = {
     "Content-Type": "application/json"
 }
 
+# --- HubSpot helper functions ---
 def find_contact_by_email(email):
     payload = {
         "filterGroups": [{
@@ -52,24 +54,39 @@ def create_or_update_contact(contact_data):
     if existing_contact_id:
         update_url = f"{HUBSPOT_CONTACT_URL}/{existing_contact_id}"
         response = requests.patch(update_url, headers=headers, json={"properties": properties})
+        print(f"Updated contact {email}, status: {response.status_code}")
     else:
         response = requests.post(HUBSPOT_CONTACT_URL, headers=headers, json={"properties": properties})
+        print(f"Created contact {email}, status: {response.status_code}")
 
+# --- Root route for testing ---
+@app.route("/", methods=["GET"])
+def home():
+    return "SignalHire → HubSpot integration is running!"
+
+# --- Callback route for SignalHire ---
 @app.route("/callback", methods=["POST"])
 def signalhire_callback():
     data = request.json
+    print("Received callback data:", data)  # debug
+
     for item in data:
         if item.get("status") == "success":
             candidate = item.get("candidate")
-            contact_data = {
-                "email": candidate["contacts"][1]["value"],  # example: pick work email
-                "firstname": candidate["fullName"].split()[0],
-                "lastname": candidate["fullName"].split()[-1],
-                "phone": candidate["contacts"][0]["value"],  # example: pick work phone
-                "jobtitle": candidate.get("headLine", "")
-            }
-            create_or_update_contact(contact_data)
+            try:
+                contact_data = {
+                    "email": candidate["contacts"][1]["value"],  # work email
+                    "firstname": candidate["fullName"].split()[0],
+                    "lastname": candidate["fullName"].split()[-1],
+                    "phone": candidate["contacts"][0]["value"],  # work phone
+                    "jobtitle": candidate.get("headLine", "")
+                }
+                create_or_update_contact(contact_data)
+            except Exception as e:
+                print("Error processing candidate:", e)
+
     return jsonify({"status": "received"}), 200
 
+# --- Run the app locally ---
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, host="0.0.0.0", port=5000)
