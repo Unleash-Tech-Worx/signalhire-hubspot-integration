@@ -3,7 +3,6 @@ import requests
 import os
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
@@ -22,11 +21,7 @@ HUBSPOT_HEADERS = {
 }
 
 # ---------------- HUBSPOT HELPERS ---------------- #
-
 def find_contact_by_email(email):
-    """Search HubSpot contact by email"""
-    if not email:
-        return None
     payload = {
         "filterGroups": [{
             "filters": [{
@@ -36,6 +31,7 @@ def find_contact_by_email(email):
             }]
         }]
     }
+
     response = requests.post(HUBSPOT_SEARCH_URL, headers=HUBSPOT_HEADERS, json=payload)
     response.raise_for_status()
     results = response.json().get("results")
@@ -44,14 +40,12 @@ def find_contact_by_email(email):
     return None
 
 def create_or_update_contact(contact_data):
-    """Create or update contact in HubSpot"""
     email = contact_data.get("email")
     if not email:
-        print("No email found, skipping contact creation.")
+        print("Skipping: no email to update")
         return
 
     existing_contact_id = find_contact_by_email(email)
-
     properties = {
         "email": email,
         "firstname": contact_data.get("firstname"),
@@ -70,25 +64,26 @@ def create_or_update_contact(contact_data):
 
     print("HubSpot response:", response.status_code, response.text)
 
-
-# ---------------- ROUTES ---------------- #
-
+# ---------------- ROOT ---------------- #
 @app.route("/", methods=["GET"])
 def home():
     return "SignalHire → HubSpot integration is running!"
 
-
+# ---------------- ENRICH ---------------- #
 @app.route("/enrich", methods=["POST"])
 def enrich():
-    """Called by HubSpot Workflow to enrich a LinkedIn profile via SignalHire"""
     data = request.json
-    print("Received from HubSpot workflow:", data)
-
-    linkedin_url = data.get("linkedin_url")
     email = data.get("email")
+    linkedin_url = data.get("linkedin_url")
 
-    if not linkedin_url or not email:
-        return jsonify({"error": "LinkedIn URL and Email required"}), 400
+    print(f"Received from HubSpot workflow: email={email}, linkedin_url={linkedin_url}")
+
+    if not email:
+        print("Skipping enrichment: missing email")
+        return jsonify({"error": "Email required"}), 400
+    if not linkedin_url or not linkedin_url.startswith("https://www.linkedin.com/in/"):
+        print("Skipping enrichment: invalid LinkedIn URL")
+        return jsonify({"error": "Valid LinkedIn URL required"}), 400
 
     headers = {
         "apikey": SIGNALHIRE_API_KEY,
@@ -106,33 +101,31 @@ def enrich():
 
     return jsonify({"status": "Sent to SignalHire"}), 200
 
-
+# ---------------- CALLBACK ---------------- #
 @app.route("/callback", methods=["POST"])
 def signalhire_callback():
-    """Called by SignalHire after enrichment"""
     data = request.json
-    print("Received from SignalHire:", data)
+    print("Received from SignalHire callback:", data)
 
     if not data:
         return jsonify({"error": "No data received"}), 400
 
-    # Process each returned candidate
     for item in data:
         if item.get("status") == "success":
             candidate = item.get("candidate", {})
-            contacts = candidate.get("contacts", [])
 
-            email = None
-            phone = None
+            contacts = candidate.get("contacts", [])
+            email = phone = None
+
+            # Get email & phone
             for c in contacts:
-                if c.get("type") == "email":
+                if c.get("type") == "email" and not email:
                     email = c.get("value")
-                if c.get("type") == "phone":
+                if c.get("type") == "phone" and not phone:
                     phone = c.get("value")
 
-            # fallback if email missing
-            if not email:
-                email = item.get("item")  # LinkedIn URL as placeholder
+            # Fallback to LinkedIn email if SignalHire doesn't provide one
+            email = email or candidate.get("social", [{}])[0].get("email")
 
             full_name = candidate.get("fullName", "")
             first_name = full_name.split()[0] if full_name else ""
@@ -146,12 +139,11 @@ def signalhire_callback():
                 "jobtitle": candidate.get("headLine", "")
             }
 
+            print(f"Processing candidate: {email}")
             create_or_update_contact(contact_data)
 
     return jsonify({"status": "Callback processed"}), 200
 
-
 # ---------------- RUN ---------------- #
-
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
