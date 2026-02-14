@@ -3,10 +3,12 @@ import requests
 import os
 from dotenv import load_dotenv
 
+# Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
 
+# ---------------- CONFIG ---------------- #
 HUBSPOT_TOKEN = os.getenv("HUBSPOT_TOKEN")
 SIGNALHIRE_API_KEY = os.getenv("SIGNALHIRE_API_KEY")
 
@@ -19,10 +21,12 @@ HUBSPOT_HEADERS = {
     "Content-Type": "application/json"
 }
 
-
 # ---------------- HUBSPOT HELPERS ---------------- #
 
 def find_contact_by_email(email):
+    """Search HubSpot contact by email"""
+    if not email:
+        return None
     payload = {
         "filterGroups": [{
             "filters": [{
@@ -32,23 +36,20 @@ def find_contact_by_email(email):
             }]
         }]
     }
-
-    response = requests.post(
-        HUBSPOT_SEARCH_URL,
-        headers=HUBSPOT_HEADERS,
-        json=payload
-    )
-
+    response = requests.post(HUBSPOT_SEARCH_URL, headers=HUBSPOT_HEADERS, json=payload)
     response.raise_for_status()
     results = response.json().get("results")
-
     if results:
         return results[0]["id"]
     return None
 
-
 def create_or_update_contact(contact_data):
-    email = contact_data["email"]
+    """Create or update contact in HubSpot"""
+    email = contact_data.get("email")
+    if not email:
+        print("No email found, skipping contact creation.")
+        return
+
     existing_contact_id = find_contact_by_email(email)
 
     properties = {
@@ -60,35 +61,26 @@ def create_or_update_contact(contact_data):
     }
 
     if existing_contact_id:
-        print("Updating contact:", email)
+        print(f"Updating contact: {email}")
         update_url = f"{HUBSPOT_CONTACT_URL}/{existing_contact_id}"
-        response = requests.patch(
-            update_url,
-            headers=HUBSPOT_HEADERS,
-            json={"properties": properties}
-        )
+        response = requests.patch(update_url, headers=HUBSPOT_HEADERS, json={"properties": properties})
     else:
-        print("Creating contact:", email)
-        response = requests.post(
-            HUBSPOT_CONTACT_URL,
-            headers=HUBSPOT_HEADERS,
-            json={"properties": properties}
-        )
+        print(f"Creating contact: {email}")
+        response = requests.post(HUBSPOT_CONTACT_URL, headers=HUBSPOT_HEADERS, json={"properties": properties})
 
     print("HubSpot response:", response.status_code, response.text)
 
 
-# ---------------- ROOT ---------------- #
+# ---------------- ROUTES ---------------- #
 
 @app.route("/", methods=["GET"])
 def home():
     return "SignalHire → HubSpot integration is running!"
 
 
-# ---------------- ENRICH (Called by HubSpot Workflow) ---------------- #
-
 @app.route("/enrich", methods=["POST"])
 def enrich():
+    """Called by HubSpot Workflow to enrich a LinkedIn profile via SignalHire"""
     data = request.json
     print("Received from HubSpot workflow:", data)
 
@@ -108,42 +100,39 @@ def enrich():
         "callbackUrl": "https://signalhire-hubspot-integration.onrender.com/callback"
     }
 
-    response = requests.post(
-        SIGNALHIRE_SEARCH_URL,
-        headers=headers,
-        json=payload
-    )
-
+    response = requests.post(SIGNALHIRE_SEARCH_URL, headers=headers, json=payload)
     print("SignalHire request status:", response.status_code)
     print("SignalHire response:", response.text)
 
     return jsonify({"status": "Sent to SignalHire"}), 200
 
 
-# ---------------- CALLBACK (Called by SignalHire) ---------------- #
-
 @app.route("/callback", methods=["POST"])
 def signalhire_callback():
+    """Called by SignalHire after enrichment"""
     data = request.json
     print("Received from SignalHire:", data)
 
     if not data:
         return jsonify({"error": "No data received"}), 400
 
+    # Process each returned candidate
     for item in data:
         if item.get("status") == "success":
             candidate = item.get("candidate", {})
-
             contacts = candidate.get("contacts", [])
 
             email = None
             phone = None
-
             for c in contacts:
                 if c.get("type") == "email":
                     email = c.get("value")
                 if c.get("type") == "phone":
                     phone = c.get("value")
+
+            # fallback if email missing
+            if not email:
+                email = item.get("item")  # LinkedIn URL as placeholder
 
             full_name = candidate.get("fullName", "")
             first_name = full_name.split()[0] if full_name else ""
@@ -165,4 +154,4 @@ def signalhire_callback():
 # ---------------- RUN ---------------- #
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=5000, debug=True)
