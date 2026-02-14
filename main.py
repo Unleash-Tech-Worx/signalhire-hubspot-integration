@@ -89,7 +89,7 @@ def send_linkedin_to_signalhire(linkedin_url):
 
     payload = {
         "items": [linkedin_url],
-        "callbackUrl": "https://webhook.site/cc443fc7-c259-428d-8b0f-00638cf8ad6e"
+        "callbackUrl": "https://signalhire-hubspot-integration.onrender.com/signalhire-callback"
     }
 
     response = requests.post(url, headers=headers, json=payload)
